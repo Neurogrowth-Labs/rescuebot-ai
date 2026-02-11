@@ -38,7 +38,7 @@ const WizardModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/95 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 bg-slate-900/95 backdrop-blur-sm overflow-y-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
       <AnimatePresence mode="wait">
         {currentStep === 0 && (
           <motion.div
