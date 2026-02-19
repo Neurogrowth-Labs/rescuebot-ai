@@ -1,18 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  Cell, 
-  CellType, 
-  RobotState, 
-  RobotStatus, 
-  SimulationMetrics, 
+import {
+  Cell,
+  CellType,
+  RobotState,
+  RobotStatus,
+  SimulationMetrics,
   SystemModule,
   ScenarioConfig
 } from './types';
-import { 
-  GRID_SIZE, 
-  TICK_RATE_MS, 
-  MAX_BATTERY, 
-  MOVEMENT_COST, 
+import {
+  MTILiveState,
+  MTISummary
+} from './types.enhanced';
+import {
+  GRID_SIZE,
+  TICK_RATE_MS,
+  MAX_BATTERY,
+  MOVEMENT_COST,
   MAX_HEALTH,
   SCENARIOS,
   CHARGING_RATE,
@@ -22,11 +26,14 @@ import { getDecisionFromGemini } from './services/geminiService';
 import * as Perception from './services/perception';
 import * as Navigation from './services/navigation';
 import * as Telemetry from './services/telemetry';
+import { MTITracker, getDefaultMTIConfig } from './services/mti/mtiService';
 
 import SimulationGrid from './components/SimulationGrid';
 import MetricsPanel from './components/MetricsPanel';
 import TerminalLog from './components/TerminalLog';
 import WizardModal from './components/Onboarding/WizardModal';
+import MTIDashboardWidget from './components/mti/MTIDashboardWidget';
+import MTIPostMissionAnalytics from './components/mti/MTIPostMissionAnalytics';
 import { useOnboardingStore } from './store/onboardingStore';
 import { v4 as uuidv4 } from 'uuid';
 
