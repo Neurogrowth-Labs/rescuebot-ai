@@ -1,505 +1,512 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  Cell,
-  CellType,
-  RobotState,
-  RobotStatus,
-  SimulationMetrics,
-  SystemModule,
-  ScenarioConfig
-} from './types';
-import {
-  MTILiveState,
-  MTISummary
-} from './types.enhanced';
-import {
-  GRID_SIZE,
-  TICK_RATE_MS,
-  MAX_BATTERY,
-  MOVEMENT_COST,
-  MAX_HEALTH,
-  SCENARIOS,
-  CHARGING_RATE,
-  CELL_SIZE_PX
-} from './constants';
-import { getDecisionFromGemini } from './services/geminiService';
-import * as Perception from './services/perception';
-import * as Navigation from './services/navigation';
-import * as Telemetry from './services/telemetry';
-import { MTITracker, getDefaultMTIConfig } from './services/mti/mtiService';
 
-import SimulationGrid from './components/SimulationGrid';
-import MetricsPanel from './components/MetricsPanel';
-import TerminalLog from './components/TerminalLog';
-import WizardModal from './components/Onboarding/WizardModal';
-import MTIDashboardWidget from './components/mti/MTIDashboardWidget';
-import MTIPostMissionAnalytics from './components/mti/MTIPostMissionAnalytics';
-import { useOnboardingStore } from './store/onboardingStore';
-import { v4 as uuidv4 } from 'uuid';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import Header from './components/Header';
+import Footer from './components/Footer';
+import Hero from './components/Hero';
+import PropertyList from './components/PropertyList';
+import { CATEGORIES, AGENT_ACHIEVEMENTS, INVESTOR_ACHIEVEMENTS } from './constants';
+import type { Property, SearchFilters, TourRequest, User, Message, Review, CalendarEvent, AgentProfile, Lead, Achievement, InvestorSettings, InvestmentRequest, BlogPost, Notification } from './types';
+import { ListingType, PropertyType, PropertyStatus, NotificationType } from './types';
+import CategoryCard from './components/CategoryCard';
+import Chatbot from './components/Chatbot';
+import MortgageCalculator from './components/MortgageCalculator';
+import ScheduleTourModal from './components/ScheduleTourModal';
+import MarketInsights from './components/MarketInsights';
+import RecommendedProperties from './components/RecommendedProperties';
+import PropertyDetailModal from './components/PropertyDetailModal';
+import CompareBar from './components/CompareBar';
+import CompareModal from './components/CompareModal';
+import { AuthModal } from './components/AuthModal';
+import UserDashboardModal from './components/UserDashboardModal';
+import PropertyFormModal from './components/PropertyFormModal';
+import FinancialServices from './components/FinancialServices';
+import AIResponseModal from './components/AIResponseModal';
+import { 
+    getProperties, 
+    saveProperties, 
+    deleteProperty,
+    getTourRequests, 
+    addTourRequest, 
+    getSavedPropertiesForUser, 
+    savePropertiesForUser, 
+    getInquiriesForSeller, 
+    getSavedSearchesForUser, 
+    saveSearchesForUser, 
+    incrementPropertyView, 
+    getMessagesForUser, 
+    sendMessage, 
+    addReview, 
+    getEvents, 
+    addEvent, 
+    updateEvent, 
+    deleteEvent, 
+    getAgentProfile, 
+    updateAgentProfile, 
+    getReviewsForAgent as getAllReviewsForAgent, 
+    getLeadsForAgent, 
+    getInvestorSettings, 
+    saveInvestorSettings, 
+    getInvestmentRequests, 
+    addInvestmentRequest, 
+    getNotifications, 
+    getReadNotificationIds, 
+    markNotificationsAsRead,
+    getCurrentUser, 
+    logoutUser      
+} from './lib/data';
+import PersonalizedMatches from './components/PersonalizedMatches';
+import AgentContactModal from './components/AgentContactModal';
+import VRTourModal from './components/VRTourModal';
+import NeighborhoodSection from './components/NeighborhoodSection';
+import BlogSection from './components/BlogSection';
+import { BookmarkIcon, ChatBubbleLeftRightIcon } from './components/icons/ActionIcons';
+import MessageModal from './components/MessageModal';
+import AgentReviewModal from './components/AgentReviewModal';
+import AIImprovementModal from './components/AIImprovementModal';
+import { useTranslations } from './contexts/LanguageContext';
+import InvestmentRequestModal from './components/InvestmentRequestModal';
+import { useCurrency } from './contexts/CurrencyContext';
+import UpgradeToInvestorModal from './components/UpgradeToInvestorModal';
+import { GoogleGenAI, Type } from "@google/genai";
+import PrivacyPolicyModal from './components/PrivacyPolicyModal';
+import TermsOfServiceModal from './components/TermsOfServiceModal';
+import CareersModal from './components/CareersModal';
+import ApplicationModal from './components/ApplicationModal';
+import NeighborhoodExplorerModal from './components/NeighborhoodExplorerModal';
+import ServiceRegistrationModal from './components/ServiceRegistrationModal';
+import BlogDetailModal from './components/BlogDetailModal';
+import ProviderServicesModal from './components/ProviderServicesModal';
+import SessionTimeoutModal from './components/SessionTimeoutModal';
+import RealTimeNews from './components/RealTimeNews';
+import AIVoiceChat from './components/AIVoiceChat';
+import NewOfferings from './components/NewOfferings';
+import { supabase } from './lib/supabase';
+
+// Page components
+import AboutPage from './components/pages/AboutPage';
+import ContactPage from './components/pages/ContactPage';
+import ServicesPage from './components/pages/ServicesPage';
+import PricingPage from './components/pages/PricingPage';
+
+
+type AuthView = 'login' | 'signup' | 'userSignup' | 'agentSignup' | 'investorSignup' | 'pendingVerificationAgent' | 'pendingVerificationInvestor' | 'forgotPassword' | 'resetConfirmation';
+type Page = 'home' | 'about' | 'services' | 'contact' | 'pricing';
+
+const initialFilters: SearchFilters = {
+    location: '',
+    listingType: ListingType.ALL,
+    propertyType: PropertyType.ALL,
+    priceMin: 0,
+    priceMax: 10000000,
+    bedrooms: 0,
+    bathrooms: 0,
+    amenities: [],
+    checkIn: '',
+    checkOut: '',
+    guests: 0,
+    vehicleType: '',
+    wellnessType: '',
+};
 
 const App: React.FC = () => {
-  // --- Onboarding State ---
-  const { hasCompletedOnboarding, scenarioConfig, robotConfig, resetOnboarding } = useOnboardingStore();
-
-  // --- Simulation State (Digital Twin) ---
-  const [grid, setGrid] = useState<Cell[][]>([]); // The "Truth"
-  const [robot, setRobot] = useState<RobotState>({
-    pos: { x: 0, y: 0 },
-    battery: MAX_BATTERY,
-    health: robotConfig?.maxHealth || MAX_HEALTH,
-    status: RobotStatus.IDLE,
-    victimsRescued: 0,
-    firesExtinguished: 0,
-    path: [],
-    currentGoal: null,
-    logs: []
-  });
-  const [metrics, setMetrics] = useState<SimulationMetrics>({
-    stepsTaken: 0,
-    batteryHistory: [],
-    explorationRate: [],
-    operationalCost: 0,
-    valueGenerated: 0
-  });
+  const [page, setPage] = useState<Page>('home');
+  const [filters, setFilters] = useState<SearchFilters>(initialFilters);
+  const [allProperties, setAllProperties] = useState<Property[]>([]);
+  const [investmentProperties, setInvestmentProperties] = useState<Property[]>([]);
+  const [isLoadingProperties, setIsLoadingProperties] = useState(true);
   
-  const [isRunning, setIsRunning] = useState(false);
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string>(
-    scenarioConfig?.id || SCENARIOS[0].id
-  );
-  const [cellSize, setCellSize] = useState<number>(CELL_SIZE_PX);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [postLoginDestination, setPostLoginDestination] = useState<'dashboard' | 'stay'>('dashboard');
 
-  // --- Helpers ---
-  const log = (source: SystemModule, msg: string, type: 'INFO' | 'SUCCESS' | 'WARNING' | 'ERROR' = 'INFO') => {
-    setRobot(prev => ({
-      ...prev,
-      logs: [...prev.logs, Telemetry.createLog(source, msg, type)]
-    }));
+  const propertyListRef = useRef<HTMLDivElement>(null);
+
+  const refreshUser = async () => {
+    const user = await getCurrentUser();
+    setCurrentUser(user);
   };
 
-  const handleEmergencyStop = () => {
-      setIsRunning(false);
-      setRobot(prev => ({ ...prev, status: RobotStatus.EMERGENCY_STOP, path: [] }));
-      log(SystemModule.SAFETY, "EMERGENCY STOP TRIGGERED BY OPERATOR. ALL SYSTEMS HALTED.", "ERROR");
-  };
-
-  const handleResetOnboarding = () => {
-    resetOnboarding();
-    setShowResetConfirm(false);
-  };
-
-  // --- Initialization (Simulation Layer) ---
-  const initSimulation = useCallback(() => {
-    // Use scenarioConfig from store if available, otherwise use selected scenario
-    const scenario = scenarioConfig || SCENARIOS.find(s => s.id === selectedScenarioId) || SCENARIOS[0];
-    const newGrid: Cell[][] = [];
-    
-    // Generate Procedural Map based on Scenario
-    for (let y = 0; y < GRID_SIZE; y++) {
-      const row: Cell[] = [];
-      for (let x = 0; x < GRID_SIZE; x++) {
-        let type = CellType.EMPTY;
-        const rand = Math.random();
-        
-        if (x === 0 && y === 0) type = CellType.START;
-        else if (rand < scenario.obstacleDensity) type = Math.random() > 0.5 ? CellType.WALL : CellType.DEBRIS;
-        
-        row.push({ x, y, type, revealed: x < 2 && y < 2, difficulty: MOVEMENT_COST[type] });
-      }
-      newGrid.push(row);
-    }
-    
-    // Asset Placement based on Scenario
-    const placeRandom = (type: CellType, count: number) => {
-      let placed = 0;
-      let attempts = 0;
-      while (placed < count && attempts < 1000) {
-        attempts++;
-        const rx = Math.floor(Math.random() * GRID_SIZE);
-        const ry = Math.floor(Math.random() * GRID_SIZE);
-        if (newGrid[ry][rx].type === CellType.EMPTY && (rx > 2 || ry > 2)) {
-          newGrid[ry][rx].type = type;
-          placed++;
-        }
-      }
-    };
-    placeRandom(CellType.VICTIM, scenario.victimCount);
-    placeRandom(CellType.FIRE, scenario.fireCount);
-
-    setGrid(newGrid);
-    setRobot({
-      pos: { x: 0, y: 0 },
-      battery: MAX_BATTERY,
-      health: robotConfig?.maxHealth || MAX_HEALTH,
-      status: RobotStatus.IDLE,
-      victimsRescued: 0,
-      firesExtinguished: 0,
-      path: [],
-      currentGoal: null,
-      logs: []
-    });
-    setMetrics({ 
-        stepsTaken: 0, 
-        batteryHistory: [{step: 0, level: 100}], 
-        explorationRate: [{step:0, rate:0}],
-        operationalCost: 0,
-        valueGenerated: 0 
-    });
-    setIsRunning(false);
-    
-    // Initial Log
-    setRobot(prev => ({
-      ...prev,
-      logs: [Telemetry.createLog(SystemModule.SIMULATION, `Scenario Loaded: ${scenario.name}`)]
-    }));
-  }, [selectedScenarioId, scenarioConfig, robotConfig]);
-
-  useEffect(() => { initSimulation(); }, [initSimulation]);
-
-  // --- Intelligence Layer Trigger ---
-  const runIntelligenceLayer = async (currentRobot: RobotState, currentGrid: Cell[][]) => {
-    if (currentRobot.status === RobotStatus.EMERGENCY_STOP) return;
-
-    setRobot(prev => ({ ...prev, status: RobotStatus.PLANNING }));
-    log(SystemModule.INTELLIGENCE, "Acquiring situational awareness...", "INFO");
-
-    // 1. Perception Query (What do I know?)
-    const knownWorld = Perception.getKnownWorld(currentGrid);
-    
-    // 2. Decision Engine (Gemini)
-    const decision = await getDecisionFromGemini(currentRobot, knownWorld, GRID_SIZE);
-    
-    log(SystemModule.INTELLIGENCE, `Strategy: ${decision.action} (${decision.priority}) - ${decision.reasoning}`, "SUCCESS");
-
-    // 3. Planning Layer (Task -> Motion)
-    let newPath: import('./types').Coordinates[] = [];
-    let nextStatus = RobotStatus.MOVING;
-
-    // Handle immediate actions or movement
-    if (decision.action === 'RECHARGE') {
-      // Prioritize Charging
-      if (currentRobot.pos.x === 0 && currentRobot.pos.y === 0) {
-        // Already at base, switch to charging immediately
-        setRobot(prev => ({ ...prev, status: RobotStatus.RECHARGING }));
-        log(SystemModule.CONTROL, "Docked at charging station. Initiating recharge sequence.", "INFO");
-        return;
-      }
-      
-      const chargeTarget = { x: 0, y: 0 };
-      newPath = Navigation.planPath(currentRobot.pos, chargeTarget, currentGrid);
-      log(SystemModule.PLANNING, "Returning to base for recharge.", "WARNING");
-      
-    } else if (decision.targetCoordinates) {
-      newPath = Navigation.planPath(currentRobot.pos, decision.targetCoordinates, currentGrid);
-      
-      if (newPath.length === 0) {
-        log(SystemModule.PLANNING, "No viable path to target. Aborting.", "WARNING");
-        nextStatus = RobotStatus.IDLE;
-      } else {
-        log(SystemModule.PLANNING, `Path computed: ${newPath.length} steps.`, "INFO");
-      }
-    } else if (decision.action === 'EXPLORE') {
-        // Fallback exploration if no coordinate provided (should adhere to known world)
-        // Simple heuristic: Find closest unknown
-        const unknownCells = currentGrid.flat().filter(c => !c.revealed);
-        if (unknownCells.length > 0) {
-           const target = unknownCells[Math.floor(Math.random() * unknownCells.length)];
-           newPath = Navigation.planPath(currentRobot.pos, {x: target.x, y: target.y}, currentGrid);
-           log(SystemModule.PLANNING, "Exploration vector calculated.", "INFO");
-        }
-    }
-
-    setRobot(prev => ({
-      ...prev,
-      status: nextStatus,
-      path: newPath,
-      currentGoal: decision.targetCoordinates || null
-    }));
-  };
-
-  // --- Main Simulation Loop (The "Tick") ---
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval> | undefined;
+    refreshUser();
 
-    if (isRunning && robot.status !== RobotStatus.EMERGENCY_STOP) {
-      // Allow loop to run even if battery is 0 ONLY if we are recharging.
-      // Otherwise stop if battery is 0.
-      if (robot.battery <= 0 && robot.status !== RobotStatus.RECHARGING) {
-        // Stop simulation if dead
-        setIsRunning(false);
-        log(SystemModule.SAFETY, "BATTERY DEPLETED. MISSION FAILED.", "ERROR");
-        return;
-      }
-
-      intervalId = setInterval(() => {
-        
-        // --- RECHARGING STATE ---
-        if (robot.status === RobotStatus.RECHARGING) {
-           const newBattery = Math.min(MAX_BATTERY, robot.battery + CHARGING_RATE);
-           setRobot(prev => ({ 
-               ...prev, 
-               battery: newBattery 
-           }));
-
-           if (newBattery >= MAX_BATTERY) {
-               setRobot(prev => ({ ...prev, status: RobotStatus.IDLE }));
-               log(SystemModule.CONTROL, "Battery fully charged. Resuming mission.", "SUCCESS");
-           }
-           // Skip movement/sensing while charging
-           return; 
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
+        if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+            await refreshUser();
+        } else if (event === 'SIGNED_OUT') {
+            setCurrentUser(null);
         }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
-        // --- LAYER 1: PERCEPTION ---
-        // Sensors read the "Truth" grid and update the Robot's "Belief"
-        const { newMapState } = Perception.scanEnvironment(grid, robot.pos);
-        if (newMapState !== grid) setGrid(newMapState);
+  const [savedPropertyIds, setSavedPropertyIds] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<'all' | 'saved'>('all');
+  const [tourRequests, setTourRequests] = useState<TourRequest[]>([]);
+  const [savedSearches, setSavedSearches] = useState<SearchFilters[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [investmentRequests, setInvestmentRequests] = useState<InvestmentRequest[]>([]);
+  const [agentProfile, setAgentProfile] = useState<AgentProfile | null>(null);
+  const [agentReviews, setAgentReviews] = useState<Review[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [agentAchievements, setAgentAchievements] = useState<Achievement[]>(AGENT_ACHIEVEMENTS.map((a, i) => ({...a, id: `ach_${i}`})));
+  const [investorAchievements, setInvestorAchievements] = useState<Achievement[]>(INVESTOR_ACHIEVEMENTS.map((a, i) => ({...a, id: `inv_ach_${i}`})));
+  const [investorSettings, setInvestorSettings] = useState<InvestorSettings | null>(null);
 
-        // --- LAYER 2: INTELLIGENCE ---
-        // If idle, trigger the decision brain
-        if (robot.status === RobotStatus.IDLE || (robot.path.length === 0 && robot.status !== RobotStatus.PLANNING)) {
-          if (robot.battery > 0) runIntelligenceLayer(robot, newMapState);
-          return; // Wait for async intelligence
-        }
-        
-        // --- LAYER 3: CONTROL & EXECUTION ---
-        if (robot.status === RobotStatus.PLANNING) return; // Busy thinking
+  const { currency, setCurrency } = useCurrency();
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.theme === 'dark' ? 'dark' : 'light'));
+  const [isSearchingAI, setIsSearchingAI] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
-        if (robot.path.length > 0) {
-          const nextStep = robot.path[0];
-          const targetCell = grid[nextStep.y][nextStep.x];
+  const [isTourModalOpen, setIsTourModalOpen] = useState(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalView, setAuthModalView] = useState<AuthView>('login');
+  const [isDashboardOpen, setIsDashboardOpen] = useState(false);
+  const [isPropertyFormOpen, setIsPropertyFormOpen] = useState(false);
+  const [propertyToEdit, setPropertyToEdit] = useState<Property | null>(null);
+  const [isAIResponseModalOpen, setIsAIResponseModalOpen] = useState(false);
+  const [isMessageModalOpen, setIsMessageModalOpen] = useState(false);
+  const [isAIVoiceChatOpen, setIsAIVoiceChatOpen] = useState(false);
+  
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
+  const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
+  const [isLoadingBlog, setIsLoadingBlog] = useState(true);
 
-          // Action Handling (Interaction with Environment)
-          if (targetCell.type === CellType.FIRE) {
-             log(SystemModule.CONTROL, "Activating suppression system.", "WARNING");
-             setGrid(prev => {
-                const ng = prev.map(r => r.map(c => ({...c})));
-                ng[nextStep.y][nextStep.x].type = CellType.DEBRIS;
-                return ng;
-             });
-             const batteryDrainRate = robotConfig?.batteryDrainRate || 1.0;
-             setRobot(prev => ({ 
-               ...prev, 
-               battery: prev.battery - (5 * batteryDrainRate), 
-               firesExtinguished: prev.firesExtinguished + 1 
-             }));
-             return; // Action consumes tick
-          }
+  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
+  const [compareList, setCompareList] = useState<Property[]>([]);
+  const [inquiryForResponse, setInquiryForResponse] = useState<TourRequest | null>(null);
+  const [agentForReview, setAgentForReview] = useState<Property['agent'] | null>(null);
+  
+  useEffect(() => {
+    const fetchData = async () => {
+        setIsLoadingProperties(true);
+        const allProps = await getProperties();
+        setAllProperties(allProps);
+        setInvestmentProperties(allProps.filter(p => p.listingType === ListingType.FOR_INVESTMENT));
+        setIsLoadingProperties(false);
 
-          if (targetCell.type === CellType.VICTIM) {
-             log(SystemModule.CONTROL, "Victim secured. Medical protocol initiated.", "SUCCESS");
-             setGrid(prev => {
-                const ng = prev.map(r => r.map(c => ({...c})));
-                ng[nextStep.y][nextStep.x].type = CellType.EMPTY;
-                return ng;
-             });
-             const batteryDrainRate = robotConfig?.batteryDrainRate || 1.0;
-             setRobot(prev => ({
-               ...prev,
-               pos: nextStep,
-               path: prev.path.slice(1),
-               victimsRescued: prev.victimsRescued + 1,
-               battery: prev.battery - (10 * batteryDrainRate)
-             }));
-             return;
-          }
+        if (currentUser) {
+            const uname = currentUser.username;
+            const uid = currentUser.id;
+            
+            const [savedIds, tours, searches, msgs, notifs, readNotifIds] = await Promise.all([
+                getSavedPropertiesForUser(uname),
+                getTourRequests(uid),
+                getSavedSearchesForUser(uname),
+                getMessagesForUser(uname),
+                getNotifications(currentUser),
+                getReadNotificationIds(uid)
+            ]);
 
-          // Movement Control
-          const controlResult = Navigation.executeControlStep(
-            robot.pos, 
-            nextStep, 
-            robot.battery, 
-            targetCell.type,
-            robotConfig || undefined
-          );
+            setSavedPropertyIds(savedIds);
+            setTourRequests(tours);
+            setSavedSearches(searches);
+            setMessages(msgs);
+            setNotifications(notifs);
+            setReadNotificationIds(readNotifIds);
 
-          if (controlResult.success) {
-            setRobot(prev => ({
-              ...prev,
-              pos: nextStep,
-              path: prev.path.slice(1),
-              battery: controlResult.newBattery,
-              status: RobotStatus.MOVING
-            }));
-          } else {
-            log(SystemModule.CONTROL, controlResult.message || "Movement Error", "ERROR");
-            setRobot(prev => ({ ...prev, path: [], status: RobotStatus.IDLE }));
-          }
-        } else {
-            // Path finished
-            // Check if we finished at Start Node and wanted to recharge
-            if (robot.pos.x === 0 && robot.pos.y === 0 && robot.battery < MAX_BATTERY) {
-                 setRobot(prev => ({ ...prev, status: RobotStatus.RECHARGING }));
-                 log(SystemModule.CONTROL, "Docked. Charging...", "INFO");
-            } else {
-                 setRobot(prev => ({ ...prev, status: RobotStatus.IDLE }));
+            if(currentUser.role === 'agent') {
+                setCalendarEvents(await getEvents(uname));
+                setAgentProfile(await getAgentProfile(uname));
+                setAgentReviews(await getAllReviewsForAgent(uname));
+                setLeads(await getLeadsForAgent(uname));
+                setInvestmentRequests(await getInvestmentRequests());
+            }
+            if (currentUser.role === 'investor') {
+                setInvestorSettings(await getInvestorSettings(uname));
             }
         }
-
-        // --- LAYER 4: TELEMETRY & OBSERVABILITY ---
-        setMetrics(prev => Telemetry.updateMetrics(
-            prev, 
-            robot.battery, 
-            grid.flat().filter(c => c.revealed).length, 
-            GRID_SIZE * GRID_SIZE,
-            robot.victimsRescued,
-            robot.firesExtinguished
-        ));
-
-      }, TICK_RATE_MS);
     }
+    fetchData();
+  }, [currentUser]);
 
-    return () => { if (intervalId) clearInterval(intervalId); };
-  }, [isRunning, robot, grid]);
+  const filteredProperties = useMemo(() => {
+    const stayKeywords = ["apartment", "property", "commercial", "housing", "home", "house", "land", "stay", "hotel"];
 
-  // --- Conditional Rendering: Show wizard if onboarding not completed ---
-  if (!hasCompletedOnboarding) {
-    return <WizardModal />;
+    return allProperties.filter(p => {
+        // Broaden the "Short-term Stay" category to include anything matching your requested keywords
+        let matchesType = filters.propertyType === PropertyType.ALL || p.propertyType === filters.propertyType;
+        
+        if (filters.propertyType === PropertyType.SHORT_TERM_RENTAL) {
+            const searchPool = `${p.title} ${p.description} ${p.propertyType}`.toLowerCase();
+            const hasKeyword = stayKeywords.some(kw => searchPool.includes(kw));
+            if (hasKeyword) matchesType = true;
+        }
+
+        const matchesListing = filters.listingType === ListingType.ALL || p.listingType === filters.listingType;
+        const matchesLocation = !filters.location || 
+            p.address.city.toLowerCase().includes(filters.location.toLowerCase()) ||
+            p.address.street.toLowerCase().includes(filters.location.toLowerCase());
+        const matchesPrice = p.price >= filters.priceMin && p.price <= filters.priceMax;
+        const matchesBeds = p.details.beds >= filters.bedrooms;
+        const matchesBaths = p.details.baths >= filters.bathrooms;
+
+        return matchesType && matchesListing && matchesLocation && matchesPrice && matchesBeds && matchesBaths;
+    });
+  }, [allProperties, filters]);
+
+  const toggleTheme = () => {
+    const newTheme = theme === 'light' ? 'dark' : 'light';
+    setTheme(newTheme);
+    localStorage.theme = newTheme;
+    if (newTheme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  };
+
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
+
+  const handleSendMessage = async (msgData: Omit<Message, 'id' | 'timestamp'>) => {
+      if(currentUser) {
+          const newMessage = await sendMessage({
+              ...msgData,
+              senderUsername: currentUser.username
+          });
+          setMessages(prev => [...prev, newMessage]);
+          setIsMessageModalOpen(false);
+      }
+  };
+
+  const handleScheduleTour = async (request: Omit<TourRequest, 'id' | 'username' | 'status' | 'timestamp'>) => {
+      if(currentUser) {
+          const newRequest = await addTourRequest(currentUser.id, request.propertyId, request.propertyTitle, request.date, request.time);
+          setTourRequests(prev => [...prev, newRequest]);
+          setIsTourModalOpen(false);
+          alert("Tour requested successfully!");
+      }
+  };
+
+  const handleNotificationClick = async (noti: Notification) => {
+       if (currentUser && !noti.isRead) {
+           await markNotificationsAsRead(currentUser.id, [noti.id]);
+           setNotifications(prev => prev.map(n => n.id === n.id ? { ...n, isRead: true } : n));
+           setReadNotificationIds(prev => new Set([...Array.from(prev), noti.id]));
+       }
+       
+       if (noti.propertyId) {
+           const prop = allProperties.find(p => p.id === noti.propertyId);
+           if (prop) {
+               setSelectedProperty(prop);
+               setIsDetailModalOpen(true);
+           }
+       }
+  };
+
+  const handleLogin = (user: User) => {
+    setCurrentUser(user);
+    setIsAuthModalOpen(false);
+    if (postLoginDestination === 'dashboard') {
+        setIsDashboardOpen(true);
+    }
+  };
+
+  const handleListProperty = () => {
+      if (!currentUser) {
+          setPostLoginDestination('stay');
+          setAuthModalView('login');
+          setIsAuthModalOpen(true);
+          return;
+      }
+      setPropertyToEdit(null);
+      setIsPropertyFormOpen(true);
+  };
+
+  const handleSaveProperty = async (property: Property) => {
+      const savedProperty = await saveProperties(property);
+      if (!savedProperty || Array.isArray(savedProperty)) {
+          alert("Failed to save property. Please try again.");
+          return;
+      }
+
+      const updatedProperties = [...allProperties];
+      const index = updatedProperties.findIndex(p => p.id === property.id || p.id === savedProperty.id);
+      if (index > -1) {
+          updatedProperties[index] = savedProperty;
+      } else {
+          updatedProperties.unshift(savedProperty);
+      }
+      setAllProperties(updatedProperties);
+      setIsPropertyFormOpen(false);
+      setPropertyToEdit(null);
+      alert("Property listing updated successfully!");
+  };
+
+  const handleEditPropertyFromDashboard = (property: Property) => {
+      setPropertyToEdit(property);
+      setIsPropertyFormOpen(true);
   }
 
+  const handleDeleteProperty = async (id: string) => {
+      if (window.confirm("Are you sure you want to delete this listing?")) {
+          const updated = allProperties.filter(p => p.id !== id);
+          setAllProperties(updated);
+          await deleteProperty(id);
+      }
+  }
+
+  const handleSelectOffering = (type: PropertyType) => {
+    setFilters(prev => ({
+        ...initialFilters,
+        propertyType: type
+    }));
+    
+    // Smooth scroll to property list
+    setTimeout(() => {
+        propertyListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  };
+
+  const handleFilterChange = (key: keyof SearchFilters, value: any) => {
+      setFilters(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handlePlanSelect = (role: 'user' | 'agent' | 'investor') => {
+      setAuthModalView(`${role}Signup` as AuthView);
+      setIsAuthModalOpen(true);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-200 p-6 flex flex-col items-center">
-      <header className="w-full max-w-7xl flex flex-col md:flex-row justify-between items-center mb-8 border-b border-slate-700 pb-4 gap-4">
-        <div>
-          <h1 className="text-3xl font-bold font-mono text-blue-400 tracking-tighter">RESCUEBOT.AI</h1>
-          <p className="text-slate-500 text-sm">Autonomous Robotics Platform // <span className="text-emerald-500">v2.1 Architecture</span></p>
-        </div>
-        
-        {/* Scenario Selection - Only show if no scenario from onboarding */}
-        {!scenarioConfig && (
-          <div className="flex items-center gap-4">
-            <div className="flex flex-col">
-                <label className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">Mission Scenario</label>
-                <select 
-                    value={selectedScenarioId} 
-                    onChange={(e) => {
-                        setSelectedScenarioId(e.target.value);
-                    }}
-                    disabled={isRunning}
-                    className="bg-slate-800 text-slate-200 text-sm p-2 rounded border border-slate-700 focus:border-blue-500 focus:outline-none disabled:opacity-50"
-                >
-                    {SCENARIOS.map(s => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                </select>
-            </div>
-
-            <div className="h-10 w-px bg-slate-700 mx-2"></div>
-          </div>
+    <div className={`font-sans min-h-screen flex flex-col ${theme}`}>
+      <Header
+        currentUser={currentUser}
+        notifications={notifications}
+        readNotificationIds={readNotificationIds}
+        onLoginClick={() => { setPostLoginDestination('dashboard'); setAuthModalView('login'); setIsAuthModalOpen(true); }}
+        onSignUpClick={() => setPage('pricing')}
+        onDashboardClick={() => setIsDashboardOpen(true)}
+        onListPropertyClick={handleListProperty}
+        onNotificationClick={handleNotificationClick}
+        onMarkAllNotificationsAsRead={() => {}}
+        onHomeClick={() => setPage('home')}
+        onAboutClick={() => setPage('about')}
+        onServicesClick={() => setPage('services')}
+        onContactClick={() => setPage('contact')}
+        theme={theme}
+        onThemeToggle={toggleTheme}
+      />
+      <main className="flex-grow">
+        {page === 'home' && (
+            <>
+                <Hero onSearch={() => {}} isSearchingAI={false} filters={filters} onFilterChange={handleFilterChange} />
+                <NewOfferings onSelectCategory={handleSelectOffering} />
+                <section ref={propertyListRef} className="py-12 bg-white dark:bg-slate-900 scroll-mt-20">
+                    <div className="container mx-auto px-6">
+                        <div className="flex justify-between items-end mb-8">
+                            <div>
+                                <h2 className="text-3xl font-black text-slate-900 dark:text-white uppercase tracking-tight">
+                                    {filters.propertyType === PropertyType.ALL ? 'All Listings' : `${filters.propertyType} Listings`}
+                                </h2>
+                                <p className="text-slate-500 dark:text-slate-400 font-medium">
+                                    {filteredProperties.length} results found matching your criteria.
+                                </p>
+                            </div>
+                        </div>
+                        <PropertyList 
+                            properties={filteredProperties} 
+                            currentUser={currentUser} 
+                            onSaveToggle={() => {}} 
+                            savedPropertyIds={savedPropertyIds} 
+                            onOpenCalculator={() => {}} 
+                            onOpenTourModal={(p) => { setSelectedProperty(p); setIsTourModalOpen(true); }} 
+                            onFindSimilar={() => {}} 
+                            onOpenDetailModal={(p) => { setSelectedProperty(p); setIsDetailModalOpen(true); }} 
+                            onToggleCompare={() => {}} 
+                            onOpenVRTour={() => {}} 
+                            compareList={[]} 
+                            onEdit={handleEditPropertyFromDashboard} 
+                            onDelete={handleDeleteProperty} 
+                            isLoading={isLoadingProperties}
+                        />
+                    </div>
+                </section>
+                <MarketInsights />
+            </>
         )}
-
-        <div className="flex items-center gap-4">
-
-            <button 
-              onClick={() => setIsRunning(!isRunning)}
-              disabled={robot.status === RobotStatus.EMERGENCY_STOP}
-              className={`px-6 py-2 rounded font-bold font-mono uppercase tracking-widest transition-all ${
-                isRunning 
-                  ? 'bg-amber-500 hover:bg-amber-600 text-white' 
-                  : 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.5)]'
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              {isRunning ? 'PAUSE' : 'START'}
-            </button>
-            <button 
-              onClick={initSimulation}
-              className="px-6 py-2 rounded font-bold font-mono uppercase tracking-widest bg-slate-700 hover:bg-slate-600 text-slate-300"
-            >
-              RESET
-            </button>
-            
-            {/* E-STOP Button (Safety Standard) */}
-            <button 
-                onClick={handleEmergencyStop}
-                className="ml-4 px-4 py-2 rounded-full font-black text-xs font-mono bg-red-600 hover:bg-red-700 text-white border-2 border-red-500 shadow-[0_0_20px_rgba(220,38,38,0.7)] animate-pulse"
-                title="EMERGENCY STOP - HARDWARE INTERRUPT"
-            >
-                E-STOP
-            </button>
-
-            {/* Reset Onboarding Button */}
-            <button 
-                onClick={() => setShowResetConfirm(true)}
-                className="ml-2 px-3 py-2 rounded font-mono text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 border border-slate-600"
-                title="Reset Onboarding - Go through setup wizard again"
-            >
-                ⚙️ RESET SETUP
-            </button>
-        </div>
-      </header>
-
-      {/* Reset Onboarding Confirmation Dialog */}
-      {showResetConfirm && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-slate-800 border-2 border-slate-600 rounded-lg p-6 max-w-md mx-4 shadow-2xl">
-            <h3 className="text-xl font-bold font-mono text-blue-400 mb-3">Reset Onboarding?</h3>
-            <p className="text-slate-300 text-sm mb-6">
-              This will clear your saved preferences and show the setup wizard again. 
-              You'll be able to choose a new scenario and robot type.
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                className="px-4 py-2 rounded font-mono text-sm bg-slate-700 hover:bg-slate-600 text-slate-300"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleResetOnboarding}
-                className="px-4 py-2 rounded font-mono text-sm bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                Reset Setup
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <main className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className="lg:col-span-7 flex flex-col gap-6">
-          <div className="flex justify-center bg-slate-800/50 p-6 rounded-xl border border-slate-700 relative overflow-auto">
-             <div className="absolute top-4 left-4 text-xs font-mono text-slate-500">CAM_FEED_01 // VISUALIZATION</div>
-             
-             {/* ZOOM CONTROL */}
-             <div className="absolute top-4 right-4 flex items-center gap-2 z-10 bg-slate-900/80 p-2 rounded-lg border border-slate-700 backdrop-blur-sm">
-                <span className="text-[10px] font-mono text-slate-500 uppercase">Zoom</span>
-                <input 
-                    type="range" 
-                    min="15" 
-                    max="60" 
-                    value={cellSize} 
-                    onChange={(e) => setCellSize(Number(e.target.value))}
-                    className="accent-blue-500 h-1 w-20 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                />
-             </div>
-
-             {/* E-STOP OVERLAY */}
-             {robot.status === RobotStatus.EMERGENCY_STOP && (
-                 <div className="absolute inset-0 bg-red-900/40 z-50 flex items-center justify-center backdrop-blur-sm rounded-xl">
-                     <div className="bg-black border-2 border-red-500 p-6 rounded-lg shadow-2xl text-center">
-                         <h2 className="text-3xl font-black text-red-500 mb-2">SYSTEM HALTED</h2>
-                         <p className="text-red-200 font-mono text-sm">EMERGENCY PROTOCOL ACTIVE</p>
-                         <p className="text-slate-400 text-xs mt-4">Manual reset required.</p>
-                     </div>
-                 </div>
-             )}
-             
-             <div className="pt-8">
-               <SimulationGrid grid={grid} robotPos={robot.pos} path={robot.path} cellSize={cellSize} />
-             </div>
-          </div>
-          <TerminalLog logs={robot.logs} />
-        </div>
-        <div className="lg:col-span-5 flex flex-col gap-6">
-           <MetricsPanel robot={robot} metrics={metrics} />
-           <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 text-xs text-slate-400 grid grid-cols-2 gap-2">
-              <div className="col-span-2 text-slate-500 border-b border-slate-700 pb-1 mb-1">LEGEND</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 bg-black border border-slate-600"></span> FOG OF WAR</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 bg-slate-500"></span> OBSTACLE</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 bg-orange-600"></span> THERMAL SIG (FIRE)</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 bg-emerald-600"></span> BIO SIG (VICTIM)</div>
-           </div>
-        </div>
+        {page === 'about' && <AboutPage />}
+        {page === 'contact' && <ContactPage />}
+        {page === 'services' && <ServicesPage onServiceClick={() => {}} />}
+        {page === 'pricing' && <PricingPage onPlanSelect={handlePlanSelect} />}
       </main>
+      <Footer onAboutClick={() => setPage('about')} onContactClick={() => setPage('contact')} onBlogClick={() => {}} onPrivacyPolicyClick={() => {}} onTermsOfServiceClick={() => {}} onCareersClick={() => {}} onFindAProClick={() => {}} />
+      <Chatbot />
+      <AIVoiceChat isOpen={isAIVoiceChatOpen} onClose={() => setIsAIVoiceChatOpen(false)} />
+      {selectedProperty && <ScheduleTourModal isOpen={isTourModalOpen} onClose={() => setIsTourModalOpen(false)} propertyTitle={selectedProperty.title} propertyId={selectedProperty.id} agentName={selectedProperty.agent.name} userId={currentUser?.id || ''} onSubmit={handleScheduleTour} />}
+      {selectedProperty && <PropertyDetailModal isOpen={isDetailModalOpen} onClose={() => setIsDetailModalOpen(false)} property={selectedProperty} currentUser={currentUser} onOpenAgentContact={() => {}} onOpenVRTour={() => {}} onMessageAgent={(p) => { setSelectedProperty(p); setIsMessageModalOpen(true); }} onLeaveReview={() => {}} />}
+      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} onLogin={handleLogin} initialView={authModalView} />
+      {currentUser && (
+          <UserDashboardModal 
+            isOpen={isDashboardOpen} 
+            onClose={() => setIsDashboardOpen(false)} 
+            user={currentUser} 
+            allProperties={allProperties} 
+            investmentProperties={investmentProperties} 
+            tourRequests={tourRequests} 
+            receivedInquiries={tourRequests} 
+            savedSearches={savedSearches} 
+            savedProperties={[]} 
+            propertiesToCompare={[]} 
+            messages={messages} 
+            calendarEvents={calendarEvents} 
+            agentProfile={agentProfile} 
+            agentReviews={agentReviews} 
+            leads={leads} 
+            agentAchievements={agentAchievements} 
+            investorAchievements={investorAchievements} 
+            investmentRequests={investmentRequests} 
+            investorSettings={investorSettings} 
+            currency={currency} 
+            theme={theme} 
+            onLogout={() => { logoutUser(); setCurrentUser(null); setIsDashboardOpen(false); }} 
+            onEditProperty={handleEditPropertyFromDashboard} 
+            onDeleteProperty={handleDeleteProperty} 
+            onDraftReply={() => {}} 
+            onRunSearch={() => {}} 
+            onDeleteSearch={() => {}} 
+            onListPropertyClick={handleListProperty} 
+            onAddEvent={() => {}} 
+            onUpdateEvent={() => {}} 
+            onDeleteEvent={() => {}} 
+            onOpenAIImprovementModal={() => {}} 
+            onUpdateAgentProfile={() => {}} 
+            onUpdateAgentAchievements={() => {}} 
+            onUpdateInvestorAchievements={() => {}} 
+            onUpdateInvestorSettings={() => {}} 
+            onThemeToggle={toggleTheme} 
+            onCompareClick={() => {}} 
+            onCurrencyChange={() => {}} 
+            onUpgradeAccountRequest={() => {}} 
+            onSendMessage={handleSendMessage}
+            onSaveToggle={() => {}}
+            savedPropertyIds={savedPropertyIds}
+            onOpenCalculator={() => {}}
+            onOpenTourModal={() => {}}
+            onFindSimilar={() => {}}
+            onOpenDetailModal={() => {}}
+            onOpenVRTour={() => {}}
+            onToggleCompare={(p) => {}}
+            onProfileUpdate={refreshUser}
+          />
+      )}
+      {selectedProperty && <MessageModal isOpen={isMessageModalOpen} onClose={() => setIsMessageModalOpen(false)} property={selectedProperty} onSend={(text) => handleSendMessage({ propertyId: selectedProperty.id, propertyTitle: selectedProperty.title, receiverUsername: selectedProperty.agent.name, senderUsername: currentUser!.username, text })} />}
+      
+      {currentUser && isPropertyFormOpen && (
+          <PropertyFormModal 
+            isOpen={isPropertyFormOpen} 
+            onClose={() => { setIsPropertyFormOpen(false); setPropertyToEdit(null); }} 
+            onSave={handleSaveProperty} 
+            propertyToEdit={propertyToEdit} 
+            currentUser={currentUser} 
+          />
+      )}
     </div>
   );
 };
